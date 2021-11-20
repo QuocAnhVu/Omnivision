@@ -1,0 +1,1 @@
+You can use any 3D modelling software to view the model. Blender, Unity, and 3dviewer.net are some great options. I used Blender and then made some rotations for the demo. I could not get textures to display.
