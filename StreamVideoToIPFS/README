@@ -1,0 +1,18 @@
+# Instructions
+
+## Start nginx-RTMP server
+```sh
+docker run -d -p 1935:1935 --name nginx-rtmp tiangolo/nginx-rtmp
+```
+
+## Start IPFS node
+I downgraded to 0.7.0 because I had issues with the current version of the Python ipfshttpclient.
+```sh
+docker run -d --name ipfs_host_0.7.0 -v $ipfs_staging:/export -v $ipfs_data:/data/ipfs -p 4001:4001 -p 4001:4001/udp -p 127.0.0.1:8080:8080 -p 127.0.0.1:5001:5001 ipfs/go-ipfs:v0.7.0
+```
+
+## Run script
+```sh
+mkdir tmp
+./stream_video.py
+```

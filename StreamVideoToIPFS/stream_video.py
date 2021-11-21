@@ -8,6 +8,9 @@ import asyncio
 from threading import Thread
 import signal
 import sys
+import json 
+import socket 
+import os
 
 # Normally you would open the video directly from source, but
 # I'm using WSL and it's not possible to get a direct video feed.
@@ -46,28 +49,47 @@ CHUNK_LENGTH = 15  # seconds
 #            '-f', 'flv',
 #            'rtmp://localhost/live/output']
 # p = subprocess.Popen(command, stdin=subprocess.PIPE)
+if not os.path.exists("./tmp"):
+    os.makedirs("./tmp")
+SOCKET_ADDRESS = "./tmp/notify.sock"
+if os.path.exists(SOCKET_ADDRESS):
+    os.remove(SOCKET_ADDRESS)
+notify_proc = subprocess.Popen("go run notify_nodes.go".split())
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+while not os.path.exists(SOCKET_ADDRESS):
+    time.sleep(0.5)
+sock.connect(SOCKET_ADDRESS)
+print('connected to ' + SOCKET_ADDRESS)
 
 # Start event loop in an external thread
 # TODO: I don't know how to make it stop when I press Ctrl+C :( 
 #       For now, close terminal window
-loop = asyncio.new_event_loop()
-def side_thread(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-thread = Thread(target=side_thread, args=(loop,))
-thread.start()
+# loop = asyncio.new_even_loop()
+# def side_thread(loop):
+#     asyncio.set_event_loop(loop)
+#     loop.run_forever()
+# thread = Thread(target=side_thread, args=(loop,))
+# thread.start()
 
 # Add to IPFS as an async coroutine
 ipfs = ipfshttpclient.connect('/dns/localhost/tcp/5001/http')
-async def save_to_ipfs(file):
+def save_to_ipfs(file, timestamp):
     res = ipfs.add(file)
     print('{} written to {}'.format(res['Name'], res['Hash']))
+    msg = {
+        "source": "0",
+        "timestamp": timestamp,
+        "address": res['Hash']
+    }
+    msg = (json.dumps(msg) + "\n").encode("utf8")
+    sock.sendall(msg)
+    os.remove(file)  # uncomment to see videos generated in ./tmp
 
 # Records and saves a single chunk
 def record_chunk():
     try:
         start_ts = time.time()  # seconds
-        chunk_name = '{}.mp4'.format(int(start_ts * 1000))
+        chunk_name = './tmp/{}.mp4'.format(int(start_ts * 1000))
         chunk = cv2.VideoWriter(chunk_name, fourcc, fps, (rewidth, reheight))
         while curr_ts := time.time() < start_ts + CHUNK_LENGTH:
             ret, frame = cap.read()
@@ -82,13 +104,15 @@ def record_chunk():
     finally:
         chunk.release()
         print("{} saved to file".format(chunk_name))
-        return chunk_name
+        return chunk_name, int(start_ts * 1000)
 
 # Records chunks and uploads to IPFS
 try:
     while cap.isOpened():
-        chunk_name = record_chunk()
-        asyncio.run_coroutine_threadsafe(save_to_ipfs(chunk_name), loop)
+        chunk_name, timestamp = record_chunk()
+        # asyncio.run_coroutine_threadsafe(save_to_ipfs(chunk_name), loop)
+        save_to_ipfs(chunk_name, timestamp)
 finally:
+    notify_proc.terminate()
     cap.release()
     cv2.destroyAllWindows()
