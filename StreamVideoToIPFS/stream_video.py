@@ -31,30 +31,15 @@ RESIZE_FACTOR = 4
 rewidth = int(width / RESIZE_FACTOR)
 reheight = int(height / RESIZE_FACTOR)
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-CHUNK_LENGTH = 15  # seconds
+CHUNK_LENGTH = 2  # seconds
 
-# Output to RTMP stream
-# FOR DEBUG
-# command = ['ffmpeg',
-#            '-y',
-#            '-f', 'rawvideo',
-#            '-vcodec', 'rawvideo',
-#            '-pix_fmt', 'bgr24',
-#            '-s', "{}x{}".format(rewidth, reheight),
-#            '-r', str(fps),
-#            '-i', '-',
-#            '-c:v', 'libx264',
-#            '-pix_fmt', 'yuv420p',
-#            '-preset', 'ultrafast',
-#            '-f', 'flv',
-#            'rtmp://localhost/live/output']
-# p = subprocess.Popen(command, stdin=subprocess.PIPE)
+# Connect to send_node.go
+send_node = subprocess.Popen("go run send_node.go".split())
 if not os.path.exists("./tmp"):
     os.makedirs("./tmp")
 SOCKET_ADDRESS = "./tmp/notify.sock"
 if os.path.exists(SOCKET_ADDRESS):
     os.remove(SOCKET_ADDRESS)
-notify_proc = subprocess.Popen("go run notify_nodes.go".split())
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 while not os.path.exists(SOCKET_ADDRESS):
     time.sleep(0.5)
@@ -62,18 +47,16 @@ sock.connect(SOCKET_ADDRESS)
 print('connected to ' + SOCKET_ADDRESS)
 
 # Start event loop in an external thread
-# TODO: I don't know how to make it stop when I press Ctrl+C :( 
-#       For now, close terminal window
-# loop = asyncio.new_even_loop()
-# def side_thread(loop):
-#     asyncio.set_event_loop(loop)
-#     loop.run_forever()
-# thread = Thread(target=side_thread, args=(loop,))
-# thread.start()
+loop = asyncio.new_event_loop()
+def side_thread(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+thread = Thread(target=side_thread, args=(loop,))
+thread.start()
 
 # Add to IPFS as an async coroutine
 ipfs = ipfshttpclient.connect('/dns/localhost/tcp/5001/http')
-def save_to_ipfs(file, timestamp):
+async def save_to_ipfs(file, timestamp):
     res = ipfs.add(file)
     print('{} written to {}'.format(res['Name'], res['Hash']))
     msg = {
@@ -87,6 +70,7 @@ def save_to_ipfs(file, timestamp):
 
 # Records and saves a single chunk
 def record_chunk():
+    halt = False
     try:
         start_ts = time.time()  # seconds
         chunk_name = './tmp/{}.mp4'.format(int(start_ts * 1000))
@@ -95,24 +79,26 @@ def record_chunk():
             ret, frame = cap.read()
             reframe = cv2.resize(frame, (rewidth, reheight))
 
-            # p.stdin.write(reframe.tobytes())
             chunk.write(reframe)
-
-            c = cv2.waitKey(1)
-            if c == 27:
-                return
+    except KeyboardInterrupt:
+        halt = True
     finally:
         chunk.release()
         print("{} saved to file".format(chunk_name))
-        return chunk_name, int(start_ts * 1000)
+        return chunk_name, int(start_ts * 1000), halt
 
 # Records chunks and uploads to IPFS
 try:
     while cap.isOpened():
-        chunk_name, timestamp = record_chunk()
-        # asyncio.run_coroutine_threadsafe(save_to_ipfs(chunk_name), loop)
-        save_to_ipfs(chunk_name, timestamp)
+        chunk_name, timestamp, halt = record_chunk()
+        if halt:
+            break
+        asyncio.run_coroutine_threadsafe(save_to_ipfs(chunk_name, timestamp), loop)
+        # save_to_ipfs(chunk_name, timestamp)
 finally:
-    notify_proc.terminate()
+    send_node.terminate()
     cap.release()
     cv2.destroyAllWindows()
+    loop.stop()
+    loop.close()
+    thread.join()

@@ -89,7 +89,7 @@ func main() {
 		}
 
 		// publish notifications
-		fmt.Println("go got ", string(buf[:n]))
+		fmt.Println("send_node.go ", string(buf[:n]))
 		topic.Publish(ctx, buf[:n])
 	}
 }
